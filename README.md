@@ -22,7 +22,7 @@ cd gitea-agent-server
 ./setup-gitea.sh worker-1 worker-2
 ```
 
-这些容器会加入 `git-net`。为保证客户端重建后仍能访问，还需在客户端自己的 Compose 配置中声明并加入 external network `git-net`。
+这些容器会加入 `git-net`。项目级 SSH 授权使用下文的 `connect-client.sh`；客户端重建后的网络配置示例也在该节。
 
 管理员为 `gitadmin`，初始密码保存在**脚本输出的状态目录**中的 `admin-password.txt`。已有管理员密码不会被重置。
 
@@ -46,6 +46,54 @@ git push gitea HEAD
 ```
 
 将 URL 替换为 `./tailnet.sh login` 输出的实际地址；在 Docker 宿主机上也可使用 `http://127.0.0.1:3000/gitadmin/my-project.git`。访问需要 Gitea 凭据。保留已有 `origin`；如果已有名为 `gitea` 的 remote，先核对地址，不直接覆盖。推送到 Gitea 不会自动更新 GitHub，之后仍可显式执行 `git push origin HEAD`。
+
+## 让其他 Docker 容器免交互访问仓库
+
+先创建上文所述的**普通可写仓库**。客户端容器需要已启动，安装 Git 和 OpenSSH，并已有本地 Git 工作副本；项目及其 Git 目录必须位于可写的 Docker volume 或 bind mount。宿主机还需要 Python 3。
+
+在 **Docker 宿主机的本仓库目录**运行，第二个参数是客户端容器内的项目绝对路径，第三个参数不加 `.git`：
+
+```bash
+./connect-client.sh worker-1 /workspace/my-project gitadmin/my-project
+```
+
+脚本默认使用客户端容器配置的用户。若日常 Git 操作由 `agent` 用户执行，显式指定该用户；也可使用 `UID:GID`。数字 UID 在容器 `/etc/passwd` 中没有对应用户时，额外指定其 home：
+
+```bash
+CLIENT_USER=agent ./connect-client.sh worker-1 /workspace/my-project gitadmin/my-project
+
+CLIENT_USER=1001:1001 CLIENT_HOME=/home/agent \
+  ./connect-client.sh worker-1 /workspace/my-project gitadmin/my-project
+```
+
+脚本从原部署状态目录的 `admin-password.txt` 读取 `gitadmin` 凭据，也支持宿主机提供 `GITEA_USER` 和 `GITEA_PASSWORD`；该账号需有目标仓库的管理员权限以管理 deploy key。整个配置过程无需交互，管理员密码只用于授权，不会交给客户端。
+
+它为该客户端和仓库配置可读写 deploy key，直接从 `git-server` 读取可信的 SSH 服务器公钥并写入专用 `known_hosts`，把客户端加入 `git-net`，设置 `gitea` remote，并验证读写连接。remote 使用生成的 SSH alias，实际连接 `git-server:22`；项目级 SSH wrapper 只对该 alias 使用专用配置，其他 SSH 目标沿用原有行为，`origin` 保持不变。脚本不会推送任何提交。
+
+完成后，以配置时相同的用户在客户端项目目录运行，SSH 认证和服务器公钥确认均无需提示：
+
+```bash
+git fetch gitea
+git push gitea HEAD
+```
+
+密钥和 SSH 配置保存在 Git common directory 下的 `.gitea-access`，普通仓库通常是 `.git/.gitea-access`。重建客户端时保留项目及 Git 目录所在的数据卷、原挂载路径和执行用户，即可保留访问配置；linked worktrees 共用 Git 配置和这份授权。同一目标的已有内部 HTTP `gitea` remote 可转换为 SSH；指向其他仓库的 remote、自定义 `core.sshCommand` 等冲突会使脚本停止，需先核对。
+
+为让客户端重建后仍加入 `git-net`，把下面网络片段合并到客户端已有的 Compose 文件，将 `worker-1` 改为实际服务名：
+
+```yaml
+services:
+  worker-1:
+    networks:
+      - git-net
+
+networks:
+  git-net:
+    external: true
+    name: git-net
+```
+
+此脚本用于其他 Docker 客户端容器。本机 M1 Max 上的 Git 工作副本仍按上节流程单独配置，尚未提供自动接入脚本。
 
 ## 访问地址
 

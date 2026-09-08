@@ -9,7 +9,7 @@
 1. 克隆完整仓库并运行 `./setup-gitea.sh`。可把已存在的客户端容器名作为参数，例如 `./setup-gitea.sh worker-1 worker-2`。不能只下载一个 sh 文件，脚本依赖 Dockerfile、锁文件和辅助文件。
 2. 已有部署先更新仓库，再用原状态目录执行新版脚本，构建后重建容器以加入 Tailscale。脚本可从现有容器标签及本地 `.gitea-state-dir` 查找原目录；需要时显式传入原 `GITEA_DIR`。保留原 Gitea 镜像版本、管理员、仓库和数据卷，不删除旧数据。
 3. 管理员用户名为 `gitadmin`，初始密码保存在状态目录的 `admin-password.txt`，已有密码不重置。不要把管理员凭据分发给所有客户端。
-4. 在客户端自己的 Compose 文件中声明并加入 external network `git-net`，使其重建后仍能通过服务名访问。
+4. 使用下文 `connect-client.sh` 为其他客户端容器配置项目级 SSH 授权，并在客户端自己的 Compose 文件中声明 external network `git-net`，使重建后仍能访问。
 5. 通过 `./manage.sh ...` 管理服务，使基础、harness 和 tailnet 配置全部加载。不要只用基础 `compose.yaml` 重建容器。
 
 ## 连接容器内 Tailscale
@@ -62,6 +62,43 @@ git push gitea HEAD
 
 地址需按运行位置选择上表的可达入口。已有同名 remote 时先核对，不直接覆盖。这会推送当前分支；其他本地分支和标签按用户实际需求单独推送。原 GitHub remote（例如 `origin`）仍可独立使用，向 Gitea push 不会自动向 GitHub push。直接推送已有本机代码不需要 GitHub Token，Gitea 凭据或 SSH key 需单独配置。
 
+## 配置其他 Docker 客户端免交互访问
+
+目标必须是已存在的普通可写 Gitea 仓库。宿主机需要 Python 3；客户端需已启动、安装 Git/OpenSSH，并在给定路径已有本地 Git 仓库。项目及 Git common directory 必须位于可写的 Docker volume 或 bind mount。
+
+在 Docker 宿主机的本仓库目录执行，项目路径是客户端容器内的绝对路径，目标使用 `OWNER/REPO`，不带 `.git`：
+
+```bash
+./connect-client.sh worker-1 /workspace/my-project gitadmin/my-project
+
+# 按实际执行 Git 的用户选择；默认使用容器配置的用户
+CLIENT_USER=agent ./connect-client.sh worker-1 /workspace/my-project gitadmin/my-project
+
+# 数字 UID 没有 /etc/passwd 条目时，额外提供 home
+CLIENT_USER=1001:1001 CLIENT_HOME=/home/agent \
+  ./connect-client.sh worker-1 /workspace/my-project gitadmin/my-project
+```
+
+脚本自动使用原部署状态目录中的 `admin-password.txt`，或宿主机提供的 `GITEA_USER`/`GITEA_PASSWORD`，账号需具备目标仓库的管理员权限。过程不交互，管理员密码不传给客户端。它配置只用于目标仓库的可读写 deploy key，从运行中的 `git-server` 读取可信服务器公钥写入专用 `known_hosts`，连接 `git-net`，并配置 `gitea` remote。生成的 SSH alias 指向 `git-server:22`；项目级 wrapper 只对该 alias 使用专用身份，其他 SSH 目标沿用正常配置，保留 `origin`。
+
+脚本会验证读写传输认证，但不实际推送提交。完成后，以配置时相同的用户在客户端项目目录执行 `git fetch gitea` 或 `git push gitea HEAD`，无需密码或服务器公钥确认提示。已有同一目标的内部 HTTP `gitea` remote 可转成 SSH；不同目标、自定义 `core.sshCommand` 等冲突会拒绝，先核对再处理。
+
+授权文件位于 Git common directory 的 `.gitea-access`，普通仓库通常为 `.git/.gitea-access`；linked worktrees 共用这份授权及 Git 配置。重建时保留项目与 Git 目录的数据卷、原挂载路径和执行用户。把下面片段合并到客户端 Compose，服务名按实际修改，确保重建后仍加入网络：
+
+```yaml
+services:
+  worker-1:
+    networks:
+      - git-net
+
+networks:
+  git-net:
+    external: true
+    name: git-net
+```
+
+该辅助脚本仅处理其他 Docker 客户端，不用于 `git-server` 本身。本机 M1 Max 工作副本的接入仍是上一节的单独流程，尚未自动化。
+
 ## 容器内代码工具
 
 通过 `./agent-shell.sh` 以独立的非 root `agent` 用户（UID `1001`）进入同一容器。可运行 `./agent-shell.sh claude`、`./agent-shell.sh dsh --help`。工作副本放在 `/workspace`，不直接编辑 `/data` 中的服务端仓库。
@@ -84,11 +121,11 @@ git push gitea HEAD
 
 ## 验证与交付
 
-先验证本机工作副本向普通 Gitea 仓库推送成功，再从一个 Docker 内部客户端和另一台真实 tailnet 机器验证 clone/pull，核对相同 ref 的提交 ID。可以使用用户已有提交，不需要制造测试提交。只检查网页或健康接口不能代替 Git 验证。
+先验证本机工作副本向普通 Gitea 仓库推送成功，再从一个 Docker 内部客户端和另一台真实 tailnet 机器验证 clone/pull，核对相同 ref 的提交 ID。使用 `connect-client.sh` 时还需验证客户端重建并重新挂载项目后，可在原用户下免交互 fetch/push，且 `origin` 保持原配置。可以使用用户已有提交，不需要制造测试提交。只检查网页或健康接口不能代替 Git 验证。
 
 确认容器内存在受 s6 管理的 Tailscale 进程、节点已连接、Serve 配置指向 `127.0.0.1:3000`。重建后验证 Gitea 仓库、用户、工具工作副本以及 Tailscale 身份和 Serve 配置仍在。若无法访问另一台 tailnet 机器或未完成授权，明确记录尚未验证的范围，不声称已完成远程访问验证。
 
-若项目使用 Git LFS，验证实际大文件下载。内部客户端优先使用 HTTP；SSH 的 LFS 认证可能返回基于 `ROOT_URL` 的地址，无法访问 tailnet 的内部客户端需配置可达的 LFS endpoint。子模块也需验证其各自 remote 的可达性。启用可选拉取镜像时，另外验证源仓库到镜像的同步结果。
+若项目使用 Git LFS，验证实际大文件下载。`connect-client.sh` 配置 Git 的 SSH 访问；SSH 的 LFS 认证可能返回基于 `ROOT_URL` 的地址，无法访问 tailnet 的内部客户端需另行配置可达的 LFS endpoint。子模块也需验证其各自 remote 的可达性。启用可选拉取镜像时，另外验证源仓库到镜像的同步结果。
 
 完成后报告普通仓库地址、两类客户端入口、保留的 remote、状态目录、数据卷、接入容器、Tailscale 节点及 Git 验证结果；如启用了镜像，另报源仓库、同步间隔和最后成功同步状态。
 
