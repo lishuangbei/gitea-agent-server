@@ -45,6 +45,30 @@ compose_base() {
   docker compose -p "$PROJECT" "${files[@]}" "$@"
 }
 
+normalize_public_url() {
+  local url="${1%/}/"
+  [[ "$url" =~ ^https://[A-Za-z0-9][A-Za-z0-9.-]*[.]ts[.]net/$ ]] || \
+    die 'GITEA_PUBLIC_URL must be an HTTPS *.ts.net root URL.'
+  printf '%s\n' "$url"
+}
+
+write_tailnet_config() {
+  local url host
+  url=$(normalize_public_url "$1")
+  host=${url#https://}
+  host=${host%/}
+  cat > "$STATE_DIR/compose.tailnet.yaml" <<YAML
+services:
+  git-server:
+    environment:
+      GITEA__server__ROOT_URL: "$url"
+      GITEA__server__DOMAIN: "$host"
+      GITEA__server__LOCAL_ROOT_URL: "http://localhost:3000/"
+      GITEA__server__PUBLIC_URL_DETECTION: "auto"
+      GITEA__server__PROTOCOL: "http"
+YAML
+}
+
 prepare_compose_env() {
   [ -f "$STATE_DIR/compose.yaml" ] || die 'No deployment configuration; run setup-gitea.sh first.'
   # Read the original service image, excluding our generated build overlay.

@@ -2,8 +2,8 @@
 # Deploy on the Docker host that runs the client containers.
 # Usage: bash setup-gitea.sh [existing-client-container ...]
 # Optional: GITEA_DIR=/path/to/state bash setup-gitea.sh worker-1 worker-2
-# Dual access: GITEA_PUBLIC_URL=https://host.tailnet-name.ts.net/ bash setup-gitea.sh worker-1
-# On the Docker host, configure Tailscale Serve separately: tailscale serve --bg 3000
+# Optional manual URL override: GITEA_PUBLIC_URL=https://gitea.tailnet-name.ts.net/
+# Tailscale runs inside this container. After setup: ./tailnet.sh login
 # References:
 # https://docs.gitea.com/installation/install-with-docker/
 # https://docs.gitea.com/administration/command-line/
@@ -15,9 +15,7 @@ resolve_state_dir
 ADMIN_USER=gitadmin
 public_url=${GITEA_PUBLIC_URL:-}
 if [ -n "$public_url" ]; then
-  public_url="${public_url%/}/"
-  [[ "$public_url" =~ ^https://[A-Za-z0-9][A-Za-z0-9.-]*[.]ts[.]net/$ ]] || \
-    die 'GITEA_PUBLIC_URL must be the HTTPS *.ts.net root URL printed by Tailscale Serve.'
+  public_url=$(normalize_public_url "$public_url")
 fi
 mkdir -p "$STATE_DIR"
 cd "$STATE_DIR"
@@ -68,20 +66,9 @@ fi
 
 # Persist the canonical web URL without replacing an existing base Compose file.
 # Both network paths still reach the same server and data volume. Backend HTTP
-# stays enabled for Docker clients and the local Tailscale reverse proxy.
+# stays enabled for Docker clients and the in-container Tailscale reverse proxy.
 if [ -n "$public_url" ]; then
-  public_host=${public_url#https://}
-  public_host=${public_host%/}
-  cat > compose.tailnet.yaml <<YAML
-services:
-  git-server:
-    environment:
-      GITEA__server__ROOT_URL: "$public_url"
-      GITEA__server__DOMAIN: "$public_host"
-      GITEA__server__LOCAL_ROOT_URL: "http://localhost:3000/"
-      GITEA__server__PUBLIC_URL_DETECTION: "auto"
-      GITEA__server__PROTOCOL: "http"
-YAML
+  write_tailnet_config "$public_url"
 fi
 
 cat > compose.harness.yaml <<'YAML'
@@ -95,9 +82,11 @@ services:
     volumes:
       - agent-home:/home/agent
       - agent-workspace:/workspace
+      - tailscale-state:/var/lib/tailscale
 volumes:
   agent-home:
   agent-workspace:
+  tailscale-state:
 YAML
 prepare_compose_env
 gitea_cli() {
@@ -164,24 +153,23 @@ fi
 printf '%s\n' \
   'Internal HTTP: http://git-server:3000' \
   'Internal SSH: git-server:22' \
-  'Host backend for Tailscale Serve: http://127.0.0.1:3000'
+  'Host-local management: http://127.0.0.1:3000' \
+  'Tailscale runs inside git-server; the Docker host needs no Tailscale.'
 if [ -f compose.tailnet.yaml ]; then
   printf '%s\n' \
     'Canonical web URL: see ROOT_URL in compose.tailnet.yaml.' \
-    'Tailnet HTTPS requires a logged-in Tailscale host and: tailscale serve --bg 3000' \
-    'Tailnet users should clone over HTTPS; SSH is currently available on Docker only.' \
+    'Configure or refresh the container tailnet endpoint: ./tailnet.sh login' \
     'Use manage.sh for Compose commands so all configuration files are included.'
 else
   printf '%s\n' \
     'Canonical web links use git-server; resolve that name on the host if using the UI.' \
-    'To configure tailnet links, rerun with GITEA_PUBLIC_URL set to the Tailscale Serve HTTPS URL.'
+    'Log in and configure the container tailnet endpoint: ./tailnet.sh login'
 fi
 printf '%s\n' \
   'Claude Code and DeepSeek Harness: run ./agent-shell.sh from the cloned repository.' \
   'Agent home and workspace persist in separate Docker volumes.' \
-  'Next: import GitHub repositories as private pull mirrors; see HANDOFF.md.' \
-  'Verify clone/pull from both networks and GitHub-to-Gitea synchronization.' \
-  'Pull mirrors are read-only: push code changes to GitHub, not to this mirror.' \
+  'Create an ordinary private repository to receive local Git pushes.' \
+  'Optional GitHub pull mirrors remain read-only; see mirror-github.sh.' \
   'For recreated clients, also declare external network git-net in their Compose files.' \
   'Repository data is stored in Docker volume local-git-server_git-data.' \
   'Do not delete that volume or run docker compose down -v if you need the data.'

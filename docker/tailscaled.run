@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+umask 077
+
+# The existing s6 supervisor owns this process alongside Gitea and OpenSSH.
+# Userspace networking needs neither host Tailscale nor TUN/NET_ADMIN.
+mkdir -p /var/lib/tailscale /run/tailscale
+chown root:root /var/lib/tailscale /run/tailscale
+chmod 700 /var/lib/tailscale /run/tailscale
+exec /usr/local/bin/tailscaled \
+  --tun=userspace-networking \
+  --statedir=/var/lib/tailscale \
+  --socket=/run/tailscale/tailscaled.sock

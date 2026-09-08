@@ -5,3 +5,4 @@
 !docker/
 !docker/entrypoint.sh
 !docker/check-harnesses.cjs
+!docker/tailscaled.run

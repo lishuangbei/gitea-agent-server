@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1
 ARG GITEA_BASE_IMAGE=docker.gitea.com/gitea:1.27.3
+ARG TAILSCALE_IMAGE=tailscale/tailscale:v1.102.3@sha256:8c42c4574ab066384fcb72f69e086a2ff1dd3652eb6f56856cee34bcf0d2f680
+FROM ${TAILSCALE_IMAGE} AS tailscale
 FROM ${GITEA_BASE_IMAGE}
 
 USER root
@@ -33,6 +35,11 @@ RUN chmod 755 /usr/local/bin/gitea-agent-entrypoint \
     && claude --version \
     && dsh --version \
     && node /opt/harness/check-harnesses.cjs
+
+COPY --from=tailscale /usr/local/bin/tailscale /usr/local/bin/tailscale
+COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
+COPY docker/tailscaled.run /etc/s6/tailscaled/run
+RUN chmod 755 /etc/s6/tailscaled/run && tailscale version
 
 WORKDIR /
 ENTRYPOINT ["/usr/local/bin/gitea-agent-entrypoint"]
