@@ -6,7 +6,10 @@ This does not build the image or use an existing container, network or volume.
 """
 
 import base64
+import contextlib
 import http.server
+import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -17,6 +20,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from unittest import mock
 
 
 IMAGE = "gitea-agent-server:local"
@@ -35,6 +39,9 @@ def check(condition, message):
 
 
 class Backend(http.server.BaseHTTPRequestHandler):
+    accepted_authorizations = {TEST_AUTHORIZATION}
+    api_unavailable = False
+
     def log_message(self, *args):
         pass
 
@@ -45,8 +52,11 @@ class Backend(http.server.BaseHTTPRequestHandler):
         self.handle_request()
 
     def handle_request(self):
-        if self.path == "/api/v1/user":
-            valid = self.headers.get("Authorization") == TEST_AUTHORIZATION
+        if self.api_unavailable and self.path.startswith("/api/"):
+            data = {"error": "temporarily unavailable"}
+            status = 503
+        elif self.path == "/api/v1/user":
+            valid = self.headers.get("Authorization") in self.accepted_authorizations
             data = {"login": "gitadmin"} if valid else {"error": "unauthorized"}
             status = 200 if valid else 401
         else:
@@ -87,6 +97,85 @@ class Backend(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+
+def test_automatic_credentials():
+    """Use real local HTTP validation/files, replacing only Gitea's token CLI."""
+    spec = importlib.util.spec_from_file_location("gateway_configuration", UTILITY)
+    gateway = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gateway)
+    check(
+        hasattr(gateway, "configure_automatically"),
+        "The image has no automatic credential setup; rebuild it before testing.",
+    )
+    auth_file = AUTH_DIRECTORY / "auth.conf"
+    original = auth_file.read_bytes()
+    minted_tokens = []
+
+    def token_cli(arguments, **kwargs):
+        check(
+            arguments[:3] == ["su-exec", "git", "gitea"]
+            and "generate-access-token" in arguments,
+            "Automatic setup must only invoke Gitea's token creation command.",
+        )
+        check(arguments[arguments.index("--username") + 1] == "gitadmin", "Wrong token owner.")
+        check(
+            set(arguments[arguments.index("--scopes") + 1].split(","))
+            == {"read:user", "write:repository"},
+            "The Git token has unexpected permissions.",
+        )
+        token = format(len(minted_tokens) + 1, "040x")
+        minted_tokens.append(token)
+        authorization = "Basic " + base64.b64encode(f"gitadmin:{token}".encode()).decode()
+        Backend.accepted_authorizations.add(authorization)
+        return subprocess.CompletedProcess(arguments, 0, stdout=token + "\n", stderr="")
+
+    def configure_auto():
+        output = io.StringIO()
+        with mock.patch.object(sys, "argv", [UTILITY, "--auto", "gitadmin"]):
+            with contextlib.redirect_stdout(output):
+                gateway.main()
+        check(
+            all(token not in output.getvalue() for token in minted_tokens),
+            "Automatic setup printed a server token.",
+        )
+
+    try:
+        with mock.patch.object(gateway.subprocess, "run", side_effect=token_cli):
+            auth_file.unlink()
+            configure_auto()
+            check(len(minted_tokens) == 1 and auth_file.exists(), "Missing auth was not bootstrapped.")
+            first_configuration = auth_file.read_bytes()
+            configure_auto()
+            check(len(minted_tokens) == 1, "Repeated setup unnecessarily created another token.")
+            check(auth_file.read_bytes() == first_configuration, "Repeated setup replaced valid auth.")
+
+            stale = "Basic " + base64.b64encode(b"gitadmin:revoked-token").decode()
+            gateway.write_configuration(stale)
+            configure_auto()
+            check(len(minted_tokens) == 2, "Rejected saved auth did not create a replacement token.")
+            check(auth_file.read_bytes() != first_configuration, "Replacement token was not saved.")
+
+            Backend.api_unavailable = True
+            for has_saved_auth in (True, False):
+                saved = auth_file.read_bytes() if has_saved_auth else None
+                if not has_saved_auth:
+                    auth_file.unlink()
+                try:
+                    configure_auto()
+                except gateway.ConfigurationError:
+                    pass
+                else:
+                    raise AssertionError("Automatic setup ignored an unavailable Gitea API.")
+                check(len(minted_tokens) == 2, "An API outage caused unnecessary token creation.")
+                if saved is not None:
+                    check(auth_file.read_bytes() == saved, "An API outage changed saved auth.")
+                else:
+                    check(not auth_file.exists(), "An API outage created an auth file.")
+    finally:
+        Backend.api_unavailable = False
+        auth_file.write_bytes(original)
+        auth_file.chmod(0o600)
 
 
 def inside_container():
@@ -196,10 +285,12 @@ def inside_container():
         original = auth_file.read_bytes()
         check(configure("incorrect-password").returncode != 0, "Invalid credentials were accepted.")
         check(auth_file.read_bytes() == original, "Invalid credentials replaced the saved configuration.")
+        test_automatic_credentials()
         print(
             "PASS: Git-only auth, unchanged Web/API auth, LFS credential redaction, "
             "Host/HTTPS forwarding, chunked 2.5 MB upload, private credential file, "
-            "and invalid-credential rejection."
+            "invalid-credential rejection, automatic token bootstrap/reuse/replacement, "
+            "and no token creation during an API outage."
         )
     finally:
         nginx.terminate()

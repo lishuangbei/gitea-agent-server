@@ -17,7 +17,7 @@ git pull --ff-only
 
 新版脚本构建镜像并重建服务，启用统一 Git 入口。已有部署沿用原状态目录，脚本从容器 Compose 标签及本地 `.gitea-state-dir` 查找；需要时显式传入原 `GITEA_DIR`。保留原 Gitea 镜像版本、管理员、仓库、工作副本和 Tailscale 状态，不删除卷。已经登录的 Tailscale 不需要重新授权。
 
-管理员为 `gitadmin`，初始密码保存在状态目录的 `admin-password.txt`。脚本只在服务端使用保存的凭据配置统一身份，不分发给客户端，也不重置已有账号密码。如果用户改过密码且状态文件未更新，使用 `GITEA_PASSWORD` 环境变量提供当前密码。不要在报告、命令输出或仓库中泄露它。
+管理员为 `gitadmin`，新建账号的初始密码保存在状态目录的 `admin-password.txt`。Git 入口先复用有效的服务端授权，缺失或失效时通过容器内 Gitea 管理命令创建专用 Token（`read:user,write:repository`），不依赖原密码文件，也不需要 `GITEA_PASSWORD`。Token 仅存服务端 `/data/git-gateway/auth.conf`，不输出或分发给客户端，不重置已有管理员密码。不要在报告、命令输出或仓库中泄露凭据。
 
 setup 参数会把客户端加入 `git-net`。以后新加客户端也可单独执行 `docker network connect git-net CLIENT_CONTAINER`，无需重建 Gitea。把 external network 声明合并到客户端自己的 Compose 文件，并保留原有网络，使重建后仍能连接：
 

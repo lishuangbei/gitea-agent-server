@@ -144,19 +144,14 @@ if ! printf '%s\n' "$users" | awk -v user="$ADMIN_USER" '$2 == user { found=1 } 
   ' < admin-password.txt
 fi
 
-# Only the server receives this credential. Git clients use the existing URLs
-# directly; Gitea's web UI and API keep their normal authentication.
-gateway_password=${GITEA_PASSWORD:-}
-if [ -z "$gateway_password" ] && [ -s admin-password.txt ]; then
-  IFS= read -r gateway_password < admin-password.txt
-fi
-[ -n "$gateway_password" ] || die 'Provide the existing gitadmin password in GITEA_PASSWORD; the account password will not be reset.'
-printf '%s\0' "$ADMIN_USER" "$gateway_password" |
-  compose exec -T --user 0:0 git-server \
-    python3 /usr/local/libexec/configure-git-gateway.py
-unset gateway_password
+# Local administration can create a dedicated server token without knowing the
+# user's password. Reuse a valid saved authorization on subsequent runs.
+compose exec -T --user 0:0 git-server \
+  python3 /usr/local/libexec/configure-git-gateway.py --auto "$ADMIN_USER"
 compose exec -T --user 0:0 git-server nginx -t
 compose exec -T --user 0:0 git-server nginx -s reload
+compose exec -T --user 0:0 git-server \
+  python3 /usr/local/libexec/configure-git-gateway.py --wait-ready "$ADMIN_USER"
 
 # Connect existing containers without disconnecting their current networks.
 for client in "$@"; do
@@ -173,7 +168,7 @@ printf 'Administrator: %s\n' "$ADMIN_USER"
 if [ -s admin-password.txt ]; then
   printf 'Initial password file: %s/admin-password.txt (not printed)\n' "$STATE_DIR"
 else
-  printf 'Administrator already existed; use its existing credentials.\n'
+  printf 'Web administrator already exists; its password was left unchanged.\n'
 fi
 printf '%s\n' \
   'Internal HTTP: http://git-server:3000' \
