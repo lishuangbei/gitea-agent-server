@@ -29,9 +29,9 @@
    `GITEA_DIR` 必须是第一次部署输出的状态目录。脚本把外部地址保存到 `compose.tailnet.yaml`，后续运行即使省略环境变量也会保留。用仓库中的 `./manage.sh ...` 操作 Compose，以便同时加载基础、harness 和 tailnet 配置。
 
 5. 在客户端自己的 Compose 文件里声明并加入 external network `git-net`，确保客户端重建后仍能通过服务名连接。
-6. 获取用户需要同步的 GitHub 仓库 URL。私有仓库用仅限目标仓库、Contents 只读权限的 GitHub fine-grained Token 授权；在目标环境安全填写 Token，不将其放入仓库 URL、代码或交付报告。组织仓库可能需要管理员批准。Gitea 容器需能出站连接 GitHub；无需开放公网入站。
-7. 在 Gitea 网页通过「右上角 + → 迁移外部仓库 → GitHub」填写源仓库 URL、Access Token、Gitea 所有者和仓库名，明确勾选「私有」以及「此仓库为镜像 / This repository will be a mirror」。只迁移代码时不勾选 Issues、PR 等额外迁移项。不要先创建普通空仓库：拉取镜像应在迁移时建立。若目标名字已有普通仓库，保留原仓库，另选镜像名称。
-8. 保留页面默认同步间隔并报告其实际值；首次迁移后在仓库设置中执行「立即同步 / Synchronize Now」，核对同步结果。镜像同步提交、分支、标签，是 GitHub → Gitea 单向同步；不配置向 GitHub 强制推送的 push mirror。
+6. 获取用户需要同步的 GitHub 仓库 URL。用户使用纯终端环境：复用 host 上已授权的 `gh` 或在脚本提示时隐藏输入 Token。私有仓库的 Token 可限定目标仓库并仅授予 Contents 读取权限；不要将 Token 放入仓库 URL、代码或交付报告。组织仓库可能需要管理员批准。Gitea 容器需能出站连接 GitHub；无需开放公网入站。
+7. 在 Docker 宿主机的部署仓库目录运行 `./mirror-github.sh https://github.com/OWNER/REPO.git`，通过 API 创建私有拉取镜像，无需 GUI。可用第二个参数指定镜像名称。不要先创建普通空仓库：已有同名仓库时脚本会停止，不会覆盖。该脚本只镜像 Git 提交、分支、标签，不导入 Issues、PR 或 Git LFS 文件。
+8. 记录脚本返回的实际同步间隔；必要时运行 `./mirror-github.sh --sync gitadmin/MIRROR_NAME` 手动触发更新。该命令只表示同步已排队，应随后比较源仓库和镜像的目标 ref 确认结果。镜像是 GitHub → Gitea 单向同步，不配置向 GitHub 强制推送的 push mirror。
 9. 为客户端配置 Gitea 仓库的读取权限。Docker 内部可用只读 SSH deploy key；tailnet 端默认使用 HTTPS 和 Gitea 凭据。避免把管理员凭据分发给所有客户端。保留已有仓库和历史，不把密码、Token 或私钥写入代码仓库。需要写代码的工作容器应另行配置 GitHub remote 和写入授权，不能向 Gitea 拉取镜像 push；不要改掉用户已有 remote。
 10. 通过 `./agent-shell.sh` 以非 root 的 `agent` 用户进入同一个容器。Claude Code 和 dsh 在此用户下单独授权；完整 `/home/agent` 和 `/workspace` 使用独立命名卷持久化。工作副本放在 `/workspace`，不直接编辑 `/data` 中的服务端仓库。可先用 `./agent-shell.sh claude --version`、`./agent-shell.sh dsh --version` 检查安装。
 

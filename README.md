@@ -26,6 +26,28 @@ cd gitea-agent-server
 
 管理员用户名为 `gitadmin`，初始密码保存在**脚本输出的状态目录**中的 `admin-password.txt`。已有管理员密码不会被重置。
 
+## 纯终端导入 GitHub 私有仓库
+
+在 Docker 宿主机的部署仓库目录执行，不用进入容器或打开 Gitea 网页：
+
+```bash
+git pull --ff-only
+./mirror-github.sh https://github.com/OWNER/REPO.git
+```
+
+脚本复用宿主机的 `GH_TOKEN`、`GITHUB_TOKEN` 或已登录的 `gh`；否则提示隐藏输入 GitHub Token。只读取代码时，Token 限定目标仓库并授予 Contents 只读权限即可。没有任何 GitHub 凭据时，需要先通过 GitHub 支持的方式取得授权；脚本不会绕过认证。
+
+Gitea 管理员密码自动从部署状态目录读取。脚本调用容器内的 Gitea API，创建**私有、只读、定期更新**的拉取镜像；GitHub Token 由 Gitea 保存用于后续同步，不写入此部署仓库。这个操作不是只在 `/workspace` 下载一个工作副本。
+
+可用第二个参数指定镜像名称；已有同名仓库不会被覆盖。手动触发已有镜像同步：
+
+```bash
+./mirror-github.sh https://github.com/OWNER/REPO.git my-mirror
+./mirror-github.sh --sync gitadmin/my-mirror
+```
+
+同步命令返回时表示任务已排队。该辅助脚本默认只镜像 Git 提交、分支和标签，不迁移 Issues、PR 或 Git LFS 文件。只更新脚本时不需要重新构建或重启容器。
+
 ## 访问地址
 
 | 访问位置 | 地址 |
