@@ -1,0 +1,17 @@
+/gitea-internal/
+/node_modules/
+/.env
+/.env.*
+/.gitea-state-dir
+!/.env.example
+**/admin-password.txt
+**/compose.tailnet.yaml
+**/compose.harness.yaml
+**/.claude/
+**/.claude.json
+**/.dsh/
+*.pem
+*.key
+*.log
+*.bak
+.DS_Store
