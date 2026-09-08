@@ -8,6 +8,7 @@
 # https://docs.gitea.com/installation/install-with-docker/
 # https://docs.gitea.com/administration/command-line/
 set -euo pipefail
+set +x
 umask 077
 source "$(dirname -- "${BASH_SOURCE[0]}")/lib/common.sh"
 require_docker
@@ -75,6 +76,16 @@ cat > compose.harness.yaml <<'YAML'
 services:
   git-server:
     image: gitea-agent-server:local
+    environment:
+      TRUSTED_GIT_ENABLED: "1"
+      GITEA__server__PROTOCOL: "http"
+      GITEA__server__HTTP_ADDR: "127.0.0.1"
+      GITEA__server__HTTP_PORT: "3001"
+      GITEA__server__LOCAL_ROOT_URL: "http://127.0.0.1:3001/"
+      GITEA__server__PUBLIC_URL_DETECTION: "auto"
+      GITEA__server__LFS_START_SERVER: "true"
+      GITEA__repository__ENABLE_PUSH_CREATE_USER: "true"
+      GITEA__repository__DEFAULT_PUSH_CREATE_PRIVATE: "true"
     build:
       context: "${GITEA_BUILD_CONTEXT:?Run setup-gitea.sh or manage.sh}"
       args:
@@ -133,6 +144,20 @@ if ! printf '%s\n' "$users" | awk -v user="$ADMIN_USER" '$2 == user { found=1 } 
   ' < admin-password.txt
 fi
 
+# Only the server receives this credential. Git clients use the existing URLs
+# directly; Gitea's web UI and API keep their normal authentication.
+gateway_password=${GITEA_PASSWORD:-}
+if [ -z "$gateway_password" ] && [ -s admin-password.txt ]; then
+  IFS= read -r gateway_password < admin-password.txt
+fi
+[ -n "$gateway_password" ] || die 'Provide the existing gitadmin password in GITEA_PASSWORD; the account password will not be reset.'
+printf '%s\0' "$ADMIN_USER" "$gateway_password" |
+  compose exec -T --user 0:0 git-server \
+    python3 /usr/local/libexec/configure-git-gateway.py
+unset gateway_password
+compose exec -T --user 0:0 git-server nginx -t
+compose exec -T --user 0:0 git-server nginx -s reload
+
 # Connect existing containers without disconnecting their current networks.
 for client in "$@"; do
   attached=$(docker inspect --format '{{with index .NetworkSettings.Networks "git-net"}}yes{{end}}' "$client")
@@ -168,7 +193,10 @@ fi
 printf '%s\n' \
   'Claude Code and DeepSeek Harness: run ./agent-shell.sh from the cloned repository.' \
   'Agent home and workspace persist in separate Docker volumes.' \
-  'Create an ordinary private repository to receive local Git pushes.' \
+  'Trusted Git HTTP access is ready: clients need no password, token, or SSH key.' \
+  'Push to http://git-server:3000/gitadmin/REPO.git to create a private repository.' \
+  'Anyone who can reach this Git endpoint can read/write repositories accessible to gitadmin.' \
+  'Web management and API access still require Gitea login.' \
   'Optional GitHub pull mirrors remain read-only; see mirror-github.sh.' \
   'For recreated clients, also declare external network git-net in their Compose files.' \
   'Repository data is stored in Docker volume local-git-server_git-data.' \

@@ -41,6 +41,13 @@ COPY --from=tailscale /usr/local/bin/tailscaled /usr/local/bin/tailscaled
 COPY docker/tailscaled.run /etc/s6/tailscaled/run
 RUN chmod 755 /etc/s6/tailscaled/run && tailscale version
 
+# Keep the public Git URLs unchanged; Gitea itself listens on loopback 3001.
+RUN apk add --no-cache nginx
+COPY docker/nginx.conf /etc/nginx/nginx.conf
+COPY docker/git-gateway.run /etc/s6/git-gateway/run
+COPY docker/configure-git-gateway.py /usr/local/libexec/configure-git-gateway.py
+RUN chmod 755 /etc/s6/git-gateway/run
+
 WORKDIR /
 ENTRYPOINT ["/usr/local/bin/gitea-agent-entrypoint"]
 CMD ["/usr/bin/s6-svscan", "/etc/s6"]

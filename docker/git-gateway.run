@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+umask 077
+
+# An updated image can still run an older deployment whose Gitea owns port 3000.
+if [ "${TRUSTED_GIT_ENABLED:-0}" != 1 ]; then
+    exec sleep infinity
+fi
+
+if [ -L /data/git-gateway ]; then
+    echo 'Git gateway configuration directory must not be a symbolic link.' >&2
+    exit 1
+fi
+mkdir -p /run/nginx /data/git-gateway
+chown root:root /run/nginx /data/git-gateway
+chmod 700 /data/git-gateway
+exec /usr/sbin/nginx -c /etc/nginx/nginx.conf -g 'daemon off;'

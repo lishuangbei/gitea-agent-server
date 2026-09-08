@@ -6,3 +6,6 @@
 !docker/entrypoint.sh
 !docker/check-harnesses.cjs
 !docker/tailscaled.run
+!docker/nginx.conf
+!docker/git-gateway.run
+!docker/configure-git-gateway.py

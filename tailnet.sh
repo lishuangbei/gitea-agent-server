@@ -86,7 +86,7 @@ for ((attempt=0; attempt<60; attempt++)); do
       'Gitea and Tailscale are ready inside git-server; login state survives recreation.' \
       'Docker clients keep using http://git-server:3000.' \
       'Verify from another tailnet machine: curl -fsS '"${public_url}api/healthz" \
-      'Repository access still requires Gitea credentials.'
+      'After setup-gitea.sh, Git HTTP access needs no client credentials; web/API login remains enabled.'
     exit 0
   fi
   sleep 2
